@@ -1,10 +1,10 @@
 package zookeeper
 
 import (
-	"path"
-	"sync/atomic"
 	"errors"
 	"fmt"
+	"path"
+	"sync/atomic"
 )
 
 const (

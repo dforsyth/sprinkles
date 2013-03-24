@@ -29,4 +29,3 @@ func (zk *ZooKeeper) CreateEphemeral(p, v string) error {
 func (zk *ZooKeeper) WatchNode(p string, onChange func(string)) error {
 	panic("not yet implemented")
 }
-

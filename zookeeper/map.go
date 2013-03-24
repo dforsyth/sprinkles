@@ -3,10 +3,9 @@ package zookeeper
 import (
 	"github.com/dforsyth/sprinkles/ds"
 	"launchpad.net/gozk/zookeeper"
-	"path"
 	"log"
+	"path"
 )
-
 
 type ZKMap struct {
 	_m          *ds.InterfaceMap
