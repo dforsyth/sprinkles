@@ -3,26 +3,31 @@ package zookeeper
 import (
 	"errors"
 	"fmt"
+	"log"
 	"path"
+	"sort"
 	"sync/atomic"
 )
 
 const (
 	OutsideBarrier = iota
+	EnteringBarrier
 	InsideBarrier
+	LeavingBarrier
 	DestroyedBarrier
 )
 
 // A very simple (double) barrier implementation
 type Barrier struct {
-	zk          *ZooKeeper
-	barrierPath string
-	barrierName string
-	entryName   string
-	entryPath   string
-	size        int
-	state       int32
-	cancel      chan struct{}
+	zk               *ZooKeeper
+	barrierName      string
+	barrierPath      string
+	barrierReadyPath string
+	entryName        string
+	entryPath        string
+	size             int
+	state            int32
+	cancel           chan struct{}
 }
 
 // Create a barrier
@@ -30,14 +35,20 @@ func (zk *ZooKeeper) CreateBarrier(barrierName, entryName string, size int) (*Ba
 	barrierPath := path.Join("/", barrierName)
 	zk.Create(barrierPath, "")
 
+	if size <= 0 {
+		return nil, errors.New("size must be > 0")
+	}
+
 	return &Barrier{
-		zk:          zk,
-		barrierPath: barrierPath,
-		entryName:   entryName,
-		barrierName: barrierName,
-		entryPath:   path.Join(barrierPath, entryName),
-		size:        size,
-		state:       OutsideBarrier,
+		zk:               zk,
+		barrierName:      barrierName,
+		barrierPath:      barrierPath,
+		barrierReadyPath: path.Join(barrierPath, "READY"),
+		entryName:        entryName,
+		entryPath:        path.Join(barrierPath, entryName),
+		size:             size,
+		state:            OutsideBarrier,
+		cancel:           make(chan struct{}, 1),
 	}, nil
 }
 
@@ -66,50 +77,80 @@ func (b *Barrier) Enter() error {
 		return errors.New("State is not OutsideBarrier")
 	}
 
-	if err := b.zk.Create(b.entryPath, ""); err != nil {
+	if err := b.zk.CreateEphemeral(b.entryPath, ""); err != nil {
 		return errors.New(fmt.Sprintf("Could not enter barrier: %s", err))
 	}
 
-	if !atomic.CompareAndSwapInt32(&b.state, OutsideBarrier, InsideBarrier) {
-		return errors.New("Could not move state from OutsideBarrier to InsideBarrier")
+	if !atomic.CompareAndSwapInt32(&b.state, OutsideBarrier, EnteringBarrier) {
+		return errors.New("Could not move state from OutsideBarrier to EnteringBarrier")
 	}
 
-	// XXX I believe the correct pattern is to wait on a ready node to appear within barrier... but i did not do that.
-	for {
-		children, _, watch, err := b.zk.Conn.ChildrenW(b.barrierPath)
+	// XXX
+	if st, watch, _ := b.zk.Conn.ExistsW(b.barrierReadyPath); st == nil {
+		children, _, err := b.zk.Conn.Children(b.barrierPath)
 		if err != nil {
 			return err
 		}
-		if len(children) >= b.size {
-			return nil
-		}
 
-		select {
-		case <-watch:
-		case <-b.cancel:
-			return errors.New("Got cancel")
+		if len(children) < b.size {
+			select {
+			case <-watch:
+				// TODO: make sure this is a created event
+			case <-b.cancel:
+				return errors.New("Got cancel")
+			}
 		}
 	}
 
+	if !atomic.CompareAndSwapInt32(&b.state, EnteringBarrier, InsideBarrier) {
+		return errors.New("Could not move state from EnteringBarrier to InsideBarrier")
+	}
 	return nil
 }
 
 func (b *Barrier) Leave() error {
-	// TODO: delete a specific version
-	b.zk.Conn.Delete(b.entryPath, -1)
+	if !atomic.CompareAndSwapInt32(&b.state, InsideBarrier, LeavingBarrier) {
+		return errors.New("Could not move state from InsideBarrier to LeavingBarrier")
+	}
+	b.zk.Conn.Delete(b.barrierReadyPath, -1)
 	for {
-		children, _, watch, err := b.zk.Conn.ChildrenW(b.barrierPath)
-		if err != nil {
-			return err
-		}
+		children, _, err := b.zk.Conn.Children(b.barrierPath)
 		if len(children) == 0 {
-			return nil
+			break
+		}
+
+		if len(children) == 1 && children[0] == b.entryName {
+			b.zk.Conn.Delete(b.entryPath, -1)
+			break
+		}
+
+		sort.Strings(children)
+
+		var waitPath string
+		if children[0] == b.entryName {
+			waitPath = path.Join(b.barrierPath, children[len(children)-1])
+		} else {
+			b.zk.Conn.Delete(b.entryPath, -1)
+			waitPath = path.Join(b.barrierPath, children[0])
+		}
+
+		_, watch, err := b.zk.Conn.ExistsW(waitPath)
+		if err != nil {
+			log.Println(err)
+			continue
 		}
 
 		select {
 		case <-watch:
+			// TODO make sure this is a deleted event
+			continue
 		case <-b.cancel:
 			return errors.New("Got cancel")
 		}
 	}
+
+	if !atomic.CompareAndSwapInt32(&b.state, LeavingBarrier, OutsideBarrier) {
+		return errors.New("Could not move state from LeavingBarrier to OutsideBarrier")
+	}
+	return nil
 }
