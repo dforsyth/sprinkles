@@ -10,7 +10,7 @@ import (
 type ZKMap struct {
 	_m          *ds.InterfaceMap
 	path        string
-	zk          *zookeeper.Conn
+	zk          *ZooKeeper
 	onChange    func(*ZKMap)
 	deserialize func(string) interface{}
 }
@@ -27,7 +27,7 @@ func (m *ZKMap) Keys() []string {
 	return m._m.Keys()
 }
 
-func NewZKMap(zk *zookeeper.Conn, path string, deserialize func(string) interface{}, onChange func(*ZKMap)) (*ZKMap, error) {
+func (zk *ZooKeeper) NewMap(path string, deserialize func(string) interface{}, onChange func(*ZKMap)) (*ZKMap, error) {
 	m := &ZKMap{
 		_m:          ds.NewInterfaceMap(nil),
 		path:        path,
@@ -43,7 +43,7 @@ func NewZKMap(zk *zookeeper.Conn, path string, deserialize func(string) interfac
 
 // XXX this should return an error channel
 func (m *ZKMap) watchChildren() error {
-	children, _, watch, err := m.zk.ChildrenW(m.path)
+	children, _, watch, err := m.zk.Conn.ChildrenW(m.path)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (m *ZKMap) updateEntries(children *ds.StringSet) {
 	for _, k := range added {
 		// TODO pull this all out into its own method
 		p := path.Join(m.path, k)
-		d, _, err := m.zk.Get(path.Join(p))
+		d, _, err := m.zk.Conn.Get(path.Join(p))
 		if err != nil {
 			log.Println(err)
 			continue
