@@ -3,7 +3,6 @@ package zookeeper
 import (
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"sort"
 	"sync/atomic"
@@ -102,8 +101,8 @@ func (b *Barrier) Enter() error {
 		case <-b.cancel:
 			return errors.New("Got cancel")
 		}
-	} else if err := b.zk.CreateEphemeral(b.barrierReadyPath, ""); err != nil {
-		return err
+	} else {
+		b.zk.CreateEphemeral(b.barrierReadyPath, "")
 	}
 
 	if !atomic.CompareAndSwapInt32(&b.state, EnteringBarrier, InsideBarrier) {
@@ -138,10 +137,12 @@ func (b *Barrier) Leave() error {
 			waitPath = path.Join(b.barrierPath, children[0])
 		}
 
-		_, watch, err := b.zk.Conn.ExistsW(waitPath)
-		if err != nil {
-			log.Println(err)
+		st, watch, err := b.zk.Conn.ExistsW(waitPath)
+		if st == nil {
 			continue
+		}
+		if err != nil {
+			return err
 		}
 
 		select {
