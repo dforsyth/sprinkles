@@ -85,21 +85,25 @@ func (b *Barrier) Enter() error {
 		return errors.New("Could not move state from OutsideBarrier to EnteringBarrier")
 	}
 
-	// XXX
-	if st, watch, _ := b.zk.Conn.ExistsW(b.barrierReadyPath); st == nil {
-		children, _, err := b.zk.Conn.Children(b.barrierPath)
-		if err != nil {
-			return err
-		}
+	_, watch, watchErr := b.zk.Conn.ExistsW(b.barrierReadyPath)
+	if watchErr != nil {
+		return watchErr
+	}
 
-		if len(children) < b.size {
-			select {
-			case <-watch:
-				// TODO: make sure this is a created event
-			case <-b.cancel:
-				return errors.New("Got cancel")
-			}
+	children, _, childrenErr := b.zk.Conn.Children(b.barrierPath)
+	if childrenErr != nil {
+		return childrenErr
+	}
+
+	if len(children) < b.size {
+		select {
+		case <-watch:
+			// TODO: make sure this is a created event
+		case <-b.cancel:
+			return errors.New("Got cancel")
 		}
+	} else if err := b.zk.CreateEphemeral(b.barrierReadyPath, ""); err != nil {
+		return err
 	}
 
 	if !atomic.CompareAndSwapInt32(&b.state, EnteringBarrier, InsideBarrier) {
