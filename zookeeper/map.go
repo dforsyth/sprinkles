@@ -27,6 +27,18 @@ func (m *ZKMap) Keys() []string {
 	return m._m.Keys()
 }
 
+func (m *ZKMap) Dump() string {
+	return m._m.Dump()
+}
+
+func (m *ZKMap) RangeLock() map[string]interface{} {
+	return m._m.RangeLock()
+}
+
+func (m *ZKMap) RangeUnlock() {
+	m._m.RangeUnlock()
+}
+
 func (zk *ZooKeeper) NewMap(path string, deserialize func(string) interface{}, onChange func(*ZKMap)) (*ZKMap, error) {
 	m := &ZKMap{
 		_m:          ds.NewInterfaceMap(nil),
